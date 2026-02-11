@@ -1,0 +1,16 @@
+defaults:
+  - _self_
+  - trainer: default
+  - model: i2iwfilm
+  - module: I2IwFiLM_module
+  - dataset: 2012-2017
+
+  - logger: none
+  - exp: i2iwfilm_S1
+
+seed: 0
+hydra:
+  job:
+    chdir: True
+    env_set:
+      DATA_DIR: "${oc.env:HOME}/datasets"

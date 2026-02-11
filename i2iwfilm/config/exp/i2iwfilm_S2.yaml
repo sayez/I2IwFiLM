@@ -1,0 +1,268 @@
+# @package _global_
+defaults:
+  - override /module: I2IwFiLM_module
+  - override /model: i2iwfilm
+
+trainer:
+  _target_: pytorch_lightning.Trainer
+  # max_epochs: 1000
+  # max_steps: 500000
+  max_epochs: 800
+  max_steps: 16000000
+  devices: ${gpus}
+  # auto_scale_batch_size: false
+  log_every_n_steps: 2
+  accumulate_grad_batches: 1
+  resume_from_checkpoint: null
+  
+  # # For test purpose only (uncomment to test on a small subset)
+  # limit_train_batches: 100
+  # limit_val_batches: 2
+  # limit_test_batches: 2
+  # limit_predict_batches: 2
+
+gpus: "???"
+src_dtype: "???"
+tgt_dtype: "???"
+input_resolution: 256
+
+S1_run_dir: "???"
+
+# logger: []
+# logger:
+#   - _target_: pytorch_lightning.loggers.WandbLogger
+#     # name: 'test'
+#     project: 'I2IwFiLM_S2'
+#     resume: 'auto'
+#     save_dir: "."
+logger:
+  - _target_: pytorch_lightning.loggers.CSVLogger
+    save_dir: 'csv_metrics'
+
+model: 
+  s1_run_dir: ${S1_run_dir}
+  s1_model_path: ./checkpoints/last.ckpt
+#  model_s1: 
+#    Configuration is obtained from the .hydra/config.yaml file in the run directory 
+#    -> No need to explicitly describe it here
+
+  model_s2:
+    _target_: i2iwfilm.model.I2IwFiLM.I2IwFiLM_S2
+    
+    # 1) DiffFormer part
+#  Parameters to instantiate the I2IwFiLMFormer is obtained same way as above -> no explicit description needed
+#  Only parameters of S1-to-S2 MLP is required
+#    mlp_in_feats: 64 # Size of CPEN_S2: Not needed, same as out_feats
+#    mlp_out_feats: 64 # Size of CPEN_S1: Not needed, defined during S1 too
+    mlp_hidden: [128, 128, 128]
+
+    zero_condition: false
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1e-4
+
+scheduler:
+  _target_: i2iwfilm.module.CustomSequentialLR
+  init_lr: 1e-5
+  maintain_lr: True
+  schedulers:
+    - _target_: torch.optim.lr_scheduler.LinearLR # warmup
+      start_factor: 1e-3
+      total_iters: ${module.scheduler.milestones.0}
+    - _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+      T_max:  ${module.scheduler.milestones.1}
+      eta_min: 1e-7
+  milestones: 
+    - 3
+    - ${trainer.max_epochs} # list steps (or epochs) when to change scheduler
+                            # (length must be equal to #schedulers and must end with max_epochs)
+
+
+module:
+  _target_: i2iwfilm.module.Base_I2IwFiLM_S2_Module
+  in_channels: 1
+  in_size: 256
+  model_config: ${model}
+  
+  GVP_loss_weights:
+    - 1.0 # Z reconstruction (L1)
+  diff_former_loss_weights:
+    - 0.0 # reconstruction (L1) loss
+    - 0.0 # FFT L1 loss
+    - 0.0 # SSIM loss
+    - 0.0 # L2 loss
+    
+  optimizer: ${optimizer}
+  scheduler_interval: epoch
+  scheduler: ${scheduler}
+  load_S1_weights: true
+
+
+
+dataset:
+  dataset: null
+  _target_: i2iwfilm.dataset.I2IwFiLMDataModule
+  data_dir: ${oc.env:I2IWFILM_PATH}/datasets/
+  dataset_name: WL2CAL
+  batch_size: 16
+  num_workers: 16
+  strategies:
+    kfold:
+      _target_: i2iwfilm.dataset.strategies.KFoldStrategyWithCondFile
+      fold: 5
+      folds: 6
+      shuffle: True
+  train_dataset:
+    _target_: i2iwfilm.dataset.dataset.NpzImagePaths
+    partition: train
+    input_dataset_file: train_${tgt_dtype}.txt
+    cond_dataset_file: train_${src_dtype}.txt
+    input_resolution: 256
+    no_preprocessing: true
+    transforms:
+      - _target_: i2iwfilm.transforms.CenteredNormalScalingKeys
+        keys:
+        - gt_image
+        - cond_image
+      - _target_: i2iwfilm.transforms.RandomRotateDictKeys
+        keys:
+        - gt_image
+        - cond_image
+        limit: 40
+        show: false
+        always_apply: true
+      - _target_: i2iwfilm.transforms.RandomCentralCropDictKeys
+        keys:
+        - gt_image
+        - cond_image
+        crop_size: 400
+        x: 56
+        y: 56
+        bw: 112
+        bh: 112
+        show: false
+        always_apply: true
+      - _target_: i2iwfilm.transforms.ResizeDictKeys
+        keys:
+        - gt_image
+        - cond_image
+        height: 256
+        width: 256
+        show: false
+        always_apply: true     
+      - _target_: i2iwfilm.transforms.RandomFlipDictKeys2
+        keys:
+          - gt_image
+          - cond_image
+        flip_v: false
+        flip_h: true
+        p: 0.5
+        
+  val_dataset:
+    _target_: i2iwfilm.dataset.dataset.NpzImagePaths
+    partition: val
+    input_dataset_file: train_${tgt_dtype}.txt
+    cond_dataset_file: train_${src_dtype}.txt
+    input_resolution: 256
+    no_preprocessing: true
+    transforms:
+      - _target_: i2iwfilm.transforms.CenteredNormalScalingKeys
+        keys:
+        - gt_image
+        - cond_image
+      - _target_: i2iwfilm.transforms.RandomRotateDictKeys
+        keys:
+        - gt_image
+        - cond_image
+        limit: 40
+        show: false
+        p: 0.
+      - _target_: i2iwfilm.transforms.RandomCentralCropDictKeys
+        keys:
+        - gt_image
+        - cond_image
+        crop_size: 400
+        x: 0
+        y: 0
+        bw: 0
+        bh: 0
+        show: false
+        always_apply: true
+      - _target_: i2iwfilm.transforms.ResizeDictKeys
+        keys:
+        - gt_image
+        - cond_image
+        height: 256
+        width: 256
+        show: false
+        always_apply: true
+      - _target_: i2iwfilm.transforms.RandomFlipDictKeys2
+        keys:
+          - gt_image
+          - cond_image
+        flip_v: false
+        flip_h: true
+        p: 0.
+        
+  test_dataset:
+    _target_: i2iwfilm.dataset.dataset.NpzImagePaths
+    partition: test
+    input_dataset_file: test_${tgt_dtype}.txt
+    cond_dataset_file: test_${src_dtype}.txt
+    input_resolution: 256
+    transforms:
+      - _target_: i2iwfilm.transforms.CenteredNormalScalingKeys
+        keys:
+        - gt_image
+        - cond_image
+      - _target_: i2iwfilm.transforms.MyCenterCrop
+        height: ${module.in_size}
+        width: ${module.in_size}
+        keys:
+          - gt_image
+          - cond_image
+      - _target_: i2iwfilm.transforms.RandomFlipDictKeys2
+        keys:
+          - gt_image
+          - cond_image
+        flip_v: false
+        flip_h: true
+        p: 0.5
+      - _target_: i2iwfilm.transforms.RandomRotate90DictKeys
+        keys:
+          - gt_image
+          - cond_image
+        always_apply: true
+
+callbacks:
+  wandb:
+    _target_: i2iwfilm.callback.WandBCallback
+    log_models: false
+  best_model_checkpoint:
+    _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    dirpath: ./checkpoints
+    save_last: False
+    monitor: val/reconstruction_loss
+    mode: min
+    filename: 'S2_Best-{epoch}-{val_reconstruction_loss:.6f}'
+  last_model_checkpoint:
+    _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    dirpath: ./checkpoints
+    save_last: True
+    filename: 'S2_{epoch}'
+  train_log_first_epoch_inputs:
+    _target_: i2iwfilm.callback.I2IwFiLM_S1_Training_Log_Inputs
+    output_dir: ./debug_inputs
+    log_wandb: true
+    epoch_freq: 3
+    batch_freq: 500
+    max_images: 1
+    only_first_epoch: true
+  validation_reconstruction_table:
+    _target_: i2iwfilm.callback.I2IwFiLM_S2_Validation_Log_Reconstructions
+    log_wandb: True
+    output_dir: ./debug_validation_reconstruction
+    epoch_freq: 20
+  LR_monitor:
+    _target_: pytorch_lightning.callbacks.LearningRateMonitor
