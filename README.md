@@ -1,5 +1,6 @@
-# Mitigating hallucination with non-adversarial strategies for image-to-image translation in solar physics
+# I2IwFiLM
 
+🏛️ Official repository of the paper [Mitigating hallucination with non-adversarial strategies for image-to-image translation in solar physics](https://www.aanda.org/articles/aa/full_html/2025/10/aa55324-25/aa55324-25.html) published in _Astronomy & Astrophysics,  Vol. 702 (2025)_.
 
 ## Installation
 
